@@ -268,12 +268,39 @@ foobar:
 ## Переход по адресу в регистре
 
 ```x86asm
-{{#rustdoc_include code/absolute-jump.S}}
+    .intel_syntax noprefix
+    .global main
+    jmp label  // relative jump
+main:
+    lea rax, [rip + label]
+    jmp rax    // absolute jump
+    jmp label  // relative jump
+    nop
+label:
+    xor eax, eax
+    ret 
 ```
 
 Или так:
 ```x86asm
-{{#rustdoc_include code/functable.S}}
+    .intel_syntax noprefix
+    .global main
+
+    .data
+functable:
+    .quad func1
+    .quad func2
+
+    .text
+main:
+    jmp [rip + functable + 8]
+
+func1:
+    xor eax, eax
+
+func2:
+    xor ecx, ecx
+    ret
 ```
 
 ## Выравнивание
