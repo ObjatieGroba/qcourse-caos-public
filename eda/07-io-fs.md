@@ -81,7 +81,13 @@ GNU его подхватил. Теперь мы пользуемся ОС GNU/L
 Напишем программу `bare.S`, которая делает системный вызов `exit`,
 не пользуясь стандартной библиотекой языка Си:
 ```
-{{#rustdoc_include code/bare.S}}
+#include <sys/syscall.h>
+
+    .global _start
+_start:
+    mov $SYS_exit, %eax
+    xor %ebx, %ebx
+    int $0x80
 ```
 
 Соберём её:
@@ -91,7 +97,11 @@ gcc -static -nostdlib bare.S -o bare
 
 То же самое в виде программы на языке Си:
 ```
-{{#rustdoc_include code/bare.c}}
+#include <sys/syscall.h>
+
+void _start() {
+    asm volatile ("int $0x80" : : "a"(SYS_exit), "b"(42));
+}
 ```
 
 Системные вызовы документированы в секции 2 руководства
@@ -218,7 +228,14 @@ ssize_t write(int fd, const void *buf, size_t count);
 писать их на стандартный выход с помощью системных вызовов.
 
 ```c
-{{#rustdoc_include code/mycat.c}}
+#include <unistd.h>
+
+int main() {
+    char c; // наш буфер в один байт
+    while (read(STDIN_FILENO, &c, sizeof(c)) > 0) { // STDIN_FILENO = 0
+        write(STDOUT_FILENO, &c, sizeof(c));        // STDOUT_FILENO = 1
+    }
+}
 ```
 
 Команда strace показывает, какие системные вызовы совершает наша программа. Использовать вот так: `strace ./mycat`
@@ -242,7 +259,36 @@ int open(const char *pathname, int flags, mode_t mode);
 Напишем программу, которая умеет работать с аргументами командной строки
 
 ```c
-{{#rustdoc_include code/catfile.c}}
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+void catfile(int sourcefd) {
+    char buf[10000];
+    ssize_t result;
+    while ((result = read(sourcefd, buf, sizeof(buf))) > 0) {
+        write(STDOUT_FILENO, buf, result);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc <= 1) {
+        catfile(STDIN_FILENO);
+    } else {
+        for (int f = 1; f < argc; ++f) {
+            int fd = open(argv[f], O_RDONLY); // в argv[f] путь к файлу
+            if (fd < 0) {
+                perror(argv[f]);
+                return EXIT_FAILURE;  // EXIT_FAILURE = 1
+            }
+            catfile(fd);
+            close(fd);
+        }
+    }
+}
 ```
 
 ## **Флаги**
@@ -269,7 +315,49 @@ off_t lseek(int fd, off_t offset, int whence);
 Напишем программу, которая перематывает файл на заданную позицию и там что-то записывает.
 
 ```c
-{{#rustdoc_include code/binpatch.c}}
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+const char usage[] =
+    "Usage: binpatch FILE OFFSET DATA\n"
+    "With empty DATA, truncates FILE at OFFSET.\n";
+
+int main(int argc, char *argv[]) {
+    if (argc != 4) {
+        write(STDERR_FILENO, usage, strlen(usage));
+        return EXIT_FAILURE;
+    }
+
+    const char *name = argv[1];
+    int offset = atoi(argv[2]);
+    const char *data = argv[3];
+
+    int fd = open(name, O_WRONLY | O_CREAT, S_IWUSR | S_IRUSR); // если передать название несуществующего файла, то благодаря O_CREAT он будет создан
+    if (fd < 0) {
+        perror(name);
+        return EXIT_FAILURE;
+    }
+
+    if (lseek(fd, offset, SEEK_SET) < 0) {
+        perror("seek");
+        return EXIT_FAILURE;
+    }
+    
+    if (write(fd, data, strlen(data)) < 0) {
+        perror("write");
+        return EXIT_FAILURE;
+    }
+
+    if (!strlen(data)) {
+        off_t position = lseek(fd, 0, SEEK_CUR);  // lseek возвращает смещение от начала файла
+        ftruncate(fd, position);  // обрезает файл
+    }
+
+    // можно не закрывать файл, поскольку мы выходим из программы, и ОС подчистит все наши файловые дескрипторы 
+}
 ```
 
 - Если в пустом файле сдвинуть позицию на 5 байт и записать туда 3 байта, то размер файла станет 8, первые 5 байт заполнятся нулями
@@ -430,7 +518,19 @@ struct dirent *readdir(DIR *dirp); // возвращает 0, если дошл�
 > 
 
 ```c
-{{#rustdoc_include code/myls.c}}
+#include <dirent.h>
+#include <stdio.h>
+
+int main(int argc, char *argv[]) {
+    const char *dirname = argv[1];
+    DIR *d = opendir(dirname);
+    struct dirent *ent;
+    while ((ent = readdir(d))) {
+        char buf[4096];  // чтобы записывать длинное имя файла
+        snprintf(buf, sizeof(buf), "%s/%s", dirname, ent->d_name);
+        printf("%s\n", buf);
+    }
+}
 ```
 
 ```c
